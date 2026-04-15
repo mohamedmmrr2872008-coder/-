@@ -278,25 +278,25 @@ async function hGetUser(uid, tg) {
 async function hAuctionBid(uid, tg, data) {
   try {
     const amount = parseFloat(data.amount) || 0;
-    if (amount < CFG.MIN_BID) return fail(`الحد الأدنى للمزايدة ${CFG.MIN_BID} TON`);
+    if (amount < CFG.MIN_BID) return { success: false, errorCode: 'BID_MIN', minBid: CFG.MIN_BID };
 
     const lockKey = `bidLocks/${uid}`;
     const lockRec = await dbGet(lockKey);
     const now = Date.now();
     if (lockRec.data && (now - (lockRec.data.ts || 0)) < 8000)
-      return fail('انتظر لحظة قبل المزايدة مرة أخرى');
+      return { success: false, errorCode: 'BID_WAIT' };
     await dbSet(lockKey, { ts: now });
 
     try {
       const user = await getOrInitUser(uid, tg);
       if ((user.tonBalance || 0) < amount) {
         await dbSet(lockKey, { ts: 0 });
-        return fail('رصيدك غير كافٍ. قم بالإيداع أولاً.');
+        return { success: false, errorCode: 'BID_INSUFFICIENT' };
       }
       const auction = await getOrInitAuction();
       if (auction.status !== 'active' || Date.now() > auction.endDate) {
         await dbSet(lockKey, { ts: 0 });
-        return fail('انتهى المزاد');
+        return { success: false, errorCode: 'AUCTION_ENDED' };
       }
       const newBalance  = parseFloat(((user.tonBalance || 0) - amount).toFixed(6));
       const newTotalBid = parseFloat(((user.totalBid   || 0) + amount).toFixed(6));
