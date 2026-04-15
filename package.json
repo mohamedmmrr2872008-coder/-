@@ -1,17 +1,17 @@
 {
   "name": "panda-bamboo-server",
   "version": "1.0.0",
-  "description": "Panda Bamboo Auction Server",
+  "description": "مزاد باكج الأساطير — Railway Server",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "dependencies": {
-    "express": "^4.19.2"
-  },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
   }
 }
