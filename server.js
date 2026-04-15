@@ -16,6 +16,7 @@
 // ================================================================
 
 import http from 'http';
+import { webcrypto as crypto } from 'crypto';
 
 // ── env object من process.env (يحاكي Cloudflare env) ──────────────
 const env = {
