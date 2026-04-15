@@ -1,13 +1,13 @@
 // ================================================================
-//  مزاد باكج الأساطير — Express Server (نسخة Railway)
+//  مزاد باكج الأساطير — Railway / Node.js Express
 //  Firebase Realtime Database
 //
-//  Environment Variables (Railway):
+//  Environment Variables (.env أو Railway Variables):
 //    FIREBASE_DATABASE_URL   e.g. https://YOUR-DB-default-rtdb.firebaseio.com
 //    FIREBASE_API_KEY        Firebase Web API Key
 //    BOT_TOKEN               Telegram Bot Token
 //    ADMIN_IDS               comma-separated Telegram admin IDs
-//    PORT                    (Railway بيحطها تلقائياً)
+//    PORT                    (اختياري — Railway يحدده تلقائياً)
 //
 //  Routes:
 //    GET  /health                    → server health check
@@ -16,10 +16,9 @@
 // ================================================================
 
 import express from 'express';
-import { createHmac, createHash } from 'crypto';
+import crypto  from 'crypto';
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
+const app = express();
 
 // ── Config ────────────────────────────────────────────────────────
 const CFG = {
@@ -32,22 +31,30 @@ const CFG = {
   APP_DESCRIPTION : 'Panda Bamboo Factory',
 };
 
-// ── CORS Middleware ───────────────────────────────────────────────
+// ── Environment ───────────────────────────────────────────────────
+const env = {
+  get FIREBASE_DATABASE_URL() { return process.env.FIREBASE_DATABASE_URL; },
+  get FIREBASE_API_KEY()      { return process.env.FIREBASE_API_KEY; },
+  get BOT_TOKEN()             { return process.env.BOT_TOKEN; },
+  get ADMIN_IDS()             { return process.env.ADMIN_IDS; },
+};
+
+// ── CORS middleware ───────────────────────────────────────────────
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-Init-Data, X-Action');
-  res.setHeader('Access-Control-Max-Age', '86400');
+  res.setHeader('Access-Control-Max-Age',       '86400');
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
 
-// ── Body parser with size limit ───────────────────────────────────
+// ── Body parser (32 KB limit) ─────────────────────────────────────
 app.use(express.text({ limit: '32kb' }));
 
 // ── Helpers ───────────────────────────────────────────────────────
-const ok   = (res, d)      => res.json({ success: true,  data: d });
-const fail = (res, m, s=400) => res.status(s).json({ success: false, error: m });
+const ok   = d  => ({ success: true,  data: d });
+const fail = (m) => ({ success: false, error: m });
 
 function sanitise(str) {
   if (!str) return str;
@@ -58,10 +65,10 @@ function sanitise(str) {
 
 // ── Firebase helpers ──────────────────────────────────────────────
 function fbUrl(path) {
-  const base = process.env.FIREBASE_DATABASE_URL?.replace(/\/$/, '');
+  const base = env.FIREBASE_DATABASE_URL?.replace(/\/$/, '');
   if (!base) throw new Error('FIREBASE_DATABASE_URL not set');
-  const key = process.env.FIREBASE_API_KEY;
-  if (!key) throw new Error('FIREBASE_API_KEY not set');
+  const key = env.FIREBASE_API_KEY;
+  if (!key)  throw new Error('FIREBASE_API_KEY not set');
   return `${base}/${path.replace(/^\//, '')}.json?key=${key}`;
 }
 
@@ -79,9 +86,9 @@ async function dbGet(path) {
 async function dbSet(path, data) {
   try {
     const r = await fetch(fbUrl(path), {
-      method: 'PUT',
+      method : 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body   : JSON.stringify(data),
     });
     if (!r.ok) throw new Error(`SET ${r.status}`);
     return { success: true };
@@ -94,9 +101,9 @@ async function dbSet(path, data) {
 async function dbUpdate(path, updates) {
   try {
     const r = await fetch(fbUrl(path), {
-      method: 'PATCH',
+      method : 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
+      body   : JSON.stringify(updates),
     });
     if (!r.ok) throw new Error(`UPDATE ${r.status}`);
     return { success: true };
@@ -109,9 +116,9 @@ async function dbUpdate(path, updates) {
 async function dbPush(path, data) {
   try {
     const r = await fetch(fbUrl(path), {
-      method: 'POST',
+      method : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body   : JSON.stringify(data),
     });
     if (!r.ok) throw new Error(`PUSH ${r.status}`);
     const j = await r.json();
@@ -137,7 +144,7 @@ async function dbDelete(path) {
 const _rl = new Map();
 function rateOk(ip) {
   const now = Date.now();
-  const d = _rl.get(ip) || { c: 0, r: now + 60000 };
+  const d   = _rl.get(ip) || { c: 0, r: now + 60000 };
   if (now > d.r) { d.c = 0; d.r = now + 60000; }
   d.c++;
   _rl.set(ip, d);
@@ -145,7 +152,6 @@ function rateOk(ip) {
 }
 
 // ── Telegram init data validation ─────────────────────────────────
-// ملاحظة: استبدلنا crypto.subtle بـ Node.js crypto المدمج
 async function validateTg(initData, botToken) {
   try {
     if (!initData) return { valid: false, error: 'No init data' };
@@ -165,9 +171,9 @@ async function validateTg(initData, botToken) {
       .map(([k, v]) => `${k}=${v}`)
       .join('\n');
 
-    // Node.js crypto بدل crypto.subtle
-    const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest();
-    const hex = createHmac('sha256', secretKey).update(dc).digest('hex');
+    // Node.js crypto (بدل Web Crypto API)
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const hex       = crypto.createHmac('sha256', secretKey).update(dc).digest('hex');
 
     if (hex !== hash) return { valid: false, error: 'Hash mismatch' };
     const u = p.get('user');
@@ -181,11 +187,11 @@ async function validateTg(initData, botToken) {
 // ── Telegram Bot notification ──────────────────────────────────────
 async function sendTgMsg(chatId, text) {
   try {
-    if (!process.env.BOT_TOKEN) return;
-    await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
+    if (!env.BOT_TOKEN) return;
+    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+      method : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+      body   : JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
     });
   } catch (e) { console.error('sendTgMsg:', e.message); }
 }
@@ -231,7 +237,7 @@ async function getOrInitUser(uid, tg = {}) {
   return user;
 }
 
-// ── Build leaderboard from bids ────────────────────────────────────
+// ── Build leaderboard ──────────────────────────────────────────────
 async function getLeaderboard() {
   try {
     const r = await dbGet('bids');
@@ -240,116 +246,81 @@ async function getLeaderboard() {
     bids.sort((a, b) => b.totalBid - a.totalBid);
     return bids.slice(0, 20).map(b => ({
       userId: b.userId,
-      name  : b.name || 'مشارك',
+      name  : b.name  || 'مشارك',
       photo : b.photo || null,
       amount: b.totalBid || 0,
     }));
-  } catch (e) {
-    return [];
-  }
+  } catch { return []; }
 }
 
 // ================================================================
 //  HANDLERS
 // ================================================================
 
-async function hGetAuction(uid, tg, data) {
+async function hGetAuction(uid, tg) {
   try {
     const [auction, user, leaderboard] = await Promise.all([
       getOrInitAuction(),
       getOrInitUser(uid, tg),
       getLeaderboard(),
     ]);
-    return {
-      success: true,
-      data: {
-        endDate    : auction.endDate,
-        status     : auction.status || 'active',
-        myBid      : user.totalBid  || 0,
-        leaderboard,
-      },
-    };
-  } catch (e) {
-    console.error('hGetAuction:', e);
-    return { success: false, error: e.message };
-  }
+    return ok({ endDate: auction.endDate, status: auction.status || 'active', myBid: user.totalBid || 0, leaderboard });
+  } catch (e) { return fail(e.message); }
 }
 
 async function hGetUser(uid, tg) {
   try {
     const user = await getOrInitUser(uid, tg);
-    return {
-      success: true,
-      data: {
-        tonBalance  : user.tonBalance   || 0,
-        totalBid    : user.totalBid     || 0,
-        hasDeposited: user.hasDeposited || false,
-      },
-    };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
+    return ok({ tonBalance: user.tonBalance || 0, totalBid: user.totalBid || 0, hasDeposited: user.hasDeposited || false });
+  } catch (e) { return fail(e.message); }
 }
 
 async function hAuctionBid(uid, tg, data) {
   try {
     const amount = parseFloat(data.amount) || 0;
-    if (amount < CFG.MIN_BID) return { success: false, error: `الحد الأدنى للمزايدة ${CFG.MIN_BID} TON` };
+    if (amount < CFG.MIN_BID) return fail(`الحد الأدنى للمزايدة ${CFG.MIN_BID} TON`);
 
     const lockKey = `bidLocks/${uid}`;
     const lockRec = await dbGet(lockKey);
     const now = Date.now();
-    if (lockRec.data && (now - (lockRec.data.ts || 0)) < 8000) {
-      return { success: false, error: 'انتظر لحظة قبل المزايدة مرة أخرى' };
-    }
+    if (lockRec.data && (now - (lockRec.data.ts || 0)) < 8000)
+      return fail('انتظر لحظة قبل المزايدة مرة أخرى');
     await dbSet(lockKey, { ts: now });
 
     try {
       const user = await getOrInitUser(uid, tg);
       if ((user.tonBalance || 0) < amount) {
         await dbSet(lockKey, { ts: 0 });
-        return { success: false, error: 'رصيدك غير كافٍ. قم بالإيداع أولاً.' };
+        return fail('رصيدك غير كافٍ. قم بالإيداع أولاً.');
       }
-
       const auction = await getOrInitAuction();
       if (auction.status !== 'active' || Date.now() > auction.endDate) {
         await dbSet(lockKey, { ts: 0 });
-        return { success: false, error: 'انتهى المزاد' };
+        return fail('انتهى المزاد');
       }
-
       const newBalance  = parseFloat(((user.tonBalance || 0) - amount).toFixed(6));
       const newTotalBid = parseFloat(((user.totalBid   || 0) + amount).toFixed(6));
       const displayName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.username || 'مشارك';
 
       await dbUpdate(`users/${uid}`, { tonBalance: newBalance, totalBid: newTotalBid });
-      await dbSet(`bids/${uid}`, {
-        userId   : uid,
-        name     : displayName,
-        photo    : user.photoUrl || null,
-        totalBid : newTotalBid,
-        lastBidAt: now,
-      });
+      await dbSet(`bids/${uid}`, { userId: uid, name: displayName, photo: user.photoUrl || null, totalBid: newTotalBid, lastBidAt: now });
       await dbPush(`users/${uid}/bidHistory`, { amount, newTotalBid, newBalance, ts: now });
       await dbSet(lockKey, { ts: 0 });
 
-      if (amount >= 5 && process.env.ADMIN_IDS) {
-        const adminIds = process.env.ADMIN_IDS.split(',').map(s => s.trim());
-        for (const adminId of adminIds) {
-          sendTgMsg(adminId,
-            `🏆 <b>مزايدة جديدة!</b>\n👤 ${displayName}\n💰 ${amount} TON\n📊 إجمالي: ${newTotalBid} TON`
-          ).catch(() => {});
-        }
+      if (amount >= 5 && env.ADMIN_IDS) {
+        env.ADMIN_IDS.split(',').map(s => s.trim()).forEach(adminId =>
+          sendTgMsg(adminId, `🏆 <b>مزايدة جديدة!</b>\n👤 ${displayName}\n💰 ${amount} TON\n📊 إجمالي: ${newTotalBid} TON`).catch(() => {})
+        );
       }
-
       const leaderboard = await getLeaderboard();
-      return { success: true, data: { tonBalance: newBalance, totalBid: newTotalBid, leaderboard } };
+      return ok({ tonBalance: newBalance, totalBid: newTotalBid, leaderboard });
     } catch (innerErr) {
       await dbSet(lockKey, { ts: 0 }).catch(() => {});
       throw innerErr;
     }
   } catch (e) {
     console.error('hAuctionBid:', e);
-    return { success: false, error: e.message };
+    return fail(e.message);
   }
 }
 
@@ -359,33 +330,19 @@ async function hDeposit(uid, data) {
     const txHash  = (data.txHash  || '').slice(0, 512);
     const comment = (data.comment || '').slice(0, 64);
 
-    if (!txHash)
-      return { success: false, error: 'لم يتم استقبال بيانات المعاملة' };
-    if (amt < CFG.MIN_DEPOSIT_TON)
-      return { success: false, error: `الحد الأدنى للإيداع ${CFG.MIN_DEPOSIT_TON} TON` };
-    if (amt > 10000)
-      return { success: false, error: 'المبلغ كبير جداً' };
+    if (!txHash)                       return fail('لم يتم استقبال بيانات المعاملة');
+    if (amt < CFG.MIN_DEPOSIT_TON)     return fail(`الحد الأدنى للإيداع ${CFG.MIN_DEPOSIT_TON} TON`);
+    if (amt > 10000)                   return fail('المبلغ كبير جداً');
 
     const safeHash = txHash.replace(/[^a-zA-Z0-9+/=]/g, '_').slice(0, 128);
     const dup = await dbGet(`txHashes/${safeHash}`);
-    if (dup.data) return { success: false, error: 'هذه المعاملة مسجلة مسبقاً' };
+    if (dup.data) return fail('هذه المعاملة مسجلة مسبقاً');
 
-    const ur = await dbGet(`users/${uid}`);
-    const u  = ur.data || {};
-
+    const ur  = await dbGet(`users/${uid}`);
+    const u   = ur.data || {};
     const depId = `dep_${uid}_${Date.now()}`;
     const now   = Date.now();
-    const rec   = {
-      depId,
-      userId     : uid,
-      txHash     : txHash.slice(0, 128),
-      comment,
-      amount     : amt,
-      status     : 'pending',
-      ts         : now,
-      createdAt  : now,
-      currentBalance: u.tonBalance || 0,
-    };
+    const rec   = { depId, userId: uid, txHash: txHash.slice(0, 128), comment, amount: amt, status: 'pending', ts: now, createdAt: now, currentBalance: u.tonBalance || 0 };
 
     await Promise.all([
       dbSet(`users/${uid}/deposits/${depId}`, rec),
@@ -396,147 +353,99 @@ async function hDeposit(uid, data) {
     console.log(`[DEPOSIT PENDING] uid:${uid} amount:${amt} TON deposit:${depId}`);
 
     sendTgMsg(uid,
-      `⏳ <b>تم استقبال طلب الإيداع</b>\n` +
-      `💰 المبلغ: <b>${amt} TON</b>\n` +
-      `🧾 الحالة: قيد المراجعة\n\n` +
-      `سيتم إضافة الرصيد بعد مراجعة الإدارة.`
+      `⏳ <b>تم استقبال طلب الإيداع</b>\n💰 المبلغ: <b>${amt} TON</b>\n🧾 الحالة: قيد المراجعة\n\nسيتم إضافة الرصيد بعد مراجعة الإدارة.`
     ).catch(() => {});
 
-    if (process.env.ADMIN_IDS) {
+    if (env.ADMIN_IDS) {
       const name = `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.username || 'مستخدم';
-      process.env.ADMIN_IDS.split(',').map(s => s.trim()).forEach(adminId => {
-        sendTgMsg(adminId,
-          `⏳ <b>طلب إيداع جديد بانتظار المراجعة</b>\n👤 ${name} (${uid})\n💵 ${amt} TON\n🧾 ID: ${depId}`
-        ).catch(() => {});
-      });
+      env.ADMIN_IDS.split(',').map(s => s.trim()).forEach(adminId =>
+        sendTgMsg(adminId, `⏳ <b>طلب إيداع جديد بانتظار المراجعة</b>\n👤 ${name} (${uid})\n💵 ${amt} TON\n🧾 ID: ${depId}`).catch(() => {})
+      );
     }
 
-    return {
-      success: true,
-      data: {
-        depositId     : depId,
-        status        : 'pending',
-        currentBalance: u.tonBalance || 0,
-        amount        : amt,
-        message       : `تم تسجيل طلب إيداع ${amt} TON وهو بانتظار مراجعة الإدارة.`,
-      },
-    };
+    return ok({ depositId: depId, status: 'pending', currentBalance: u.tonBalance || 0, amount: amt, message: `تم تسجيل طلب إيداع ${amt} TON وهو بانتظار مراجعة الإدارة.` });
   } catch (e) {
     console.error('hDeposit:', e);
-    return { success: false, error: e.message };
+    return fail(e.message);
   }
 }
 
 async function hVerifyDeposit(uid, data) {
   try {
     const { depositId } = data;
-    if (!depositId) return { success: false, error: 'depositId مطلوب' };
-
+    if (!depositId) return fail('depositId مطلوب');
     const dr  = await dbGet(`users/${uid}/deposits/${depositId}`);
     const dep = dr.data;
-    if (!dep) return { success: false, error: 'الإيداع غير موجود' };
-
-    if (dep.status === 'completed')
-      return { success: true, data: { status: 'completed', amount: dep.amount } };
-
-    return { success: true, data: { status: 'pending' } };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
+    if (!dep) return fail('الإيداع غير موجود');
+    if (dep.status === 'completed') return ok({ status: 'completed', amount: dep.amount });
+    return ok({ status: 'pending' });
+  } catch (e) { return fail(e.message); }
 }
 
 async function hSubmitPromo(uid, tg, data) {
   try {
     const url = (data.url || '').trim().slice(0, 256);
-    if (!url || !url.startsWith('http')) return { success: false, error: 'رابط غير صالح' };
-    if (!url.includes('t.me')) return { success: false, error: 'يجب أن يكون رابط تيليجرام' };
+    if (!url || !url.startsWith('http')) return fail('رابط غير صالح');
+    if (!url.includes('t.me'))           return fail('يجب أن يكون رابط تيليجرام');
 
     const user = await getOrInitUser(uid, tg);
     const displayName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.username || 'مشارك';
 
     const promoId = `promo_${uid}_${Date.now()}`;
-    const record  = {
-      promoId,
-      userId  : uid,
-      name    : displayName,
-      photoUrl: user.photoUrl || null,
-      url,
-      status  : 'pending',
-      earned  : null,
-      ts      : Date.now(),
-    };
+    const record  = { promoId, userId: uid, name: displayName, photoUrl: user.photoUrl || null, url, status: 'pending', earned: null, ts: Date.now() };
 
     await Promise.all([
       dbSet(`users/${uid}/promos/${promoId}`, record),
       dbSet(`pendingPromos/${promoId}`, record),
     ]);
 
-    if (process.env.ADMIN_IDS) {
-      const adminIds = process.env.ADMIN_IDS.split(',').map(s => s.trim());
-      for (const adminId of adminIds) {
-        sendTgMsg(adminId,
-          `📢 <b>منشور جديد للمراجعة</b>\n👤 ${displayName} (${uid})\n🔗 ${url}`
-        ).catch(() => {});
-      }
+    if (env.ADMIN_IDS) {
+      env.ADMIN_IDS.split(',').map(s => s.trim()).forEach(adminId =>
+        sendTgMsg(adminId, `📢 <b>منشور جديد للمراجعة</b>\n👤 ${displayName} (${uid})\n🔗 ${url}`).catch(() => {})
+      );
     }
-
-    return { success: true, data: { id: promoId, status: 'pending' } };
+    return ok({ id: promoId, status: 'pending' });
   } catch (e) {
     console.error('hSubmitPromo:', e);
-    return { success: false, error: e.message };
+    return fail(e.message);
   }
 }
 
-// ── ADMIN ──────────────────────────────────────────────────────────
 async function hAdmin(action, data) {
   try {
     switch (action) {
 
       case 'adminGetUser': {
         const uid = String(data.userId || '');
-        if (!uid) return { success: false, error: 'userId required' };
+        if (!uid) return fail('userId required');
         const [userR, bidsR, depositsR] = await Promise.all([
           dbGet(`users/${uid}`),
           dbGet(`bids/${uid}`),
           dbGet(`users/${uid}/deposits`),
         ]);
-        return {
-          success: true,
-          data: {
-            user    : userR.data,
-            bidEntry: bidsR.data,
-            deposits: depositsR.data ? Object.values(depositsR.data) : [],
-          },
-        };
+        return ok({ user: userR.data, bidEntry: bidsR.data, deposits: depositsR.data ? Object.values(depositsR.data) : [] });
       }
 
       case 'adminConfirmDeposit': {
         const { userId, depositId, amountTon } = data;
-        if (!userId || !depositId) return { success: false, error: 'userId and depositId required' };
+        if (!userId || !depositId) return fail('userId and depositId required');
         const dr  = await dbGet(`users/${userId}/deposits/${depositId}`);
         const dep = dr.data;
-        if (!dep) return { success: false, error: 'Deposit not found' };
-        if (dep.status === 'completed') return { success: false, error: 'Already completed' };
+        if (!dep)                         return fail('Deposit not found');
+        if (dep.status === 'completed')   return fail('Already completed');
 
         const tonAmt = parseFloat(amountTon || dep.amount || 0);
-        const ur   = await dbGet(`users/${userId}`);
-        const user = ur.data || {};
+        const ur     = await dbGet(`users/${userId}`);
+        const user   = ur.data || {};
         const newBalance = parseFloat(((user.tonBalance || 0) + tonAmt).toFixed(6));
 
         await Promise.all([
           dbUpdate(`users/${userId}`, { tonBalance: newBalance, hasDeposited: true }),
-          dbUpdate(`users/${userId}/deposits/${depositId}`, {
-            status: 'completed', completedAt: Date.now(),
-            creditedTon: tonAmt, confirmedByAdmin: true,
-          }),
+          dbUpdate(`users/${userId}/deposits/${depositId}`, { status: 'completed', completedAt: Date.now(), creditedTon: tonAmt, confirmedByAdmin: true }),
           dbDelete(`pendingDeposits/${depositId}`),
         ]);
-
-        sendTgMsg(userId,
-          `✅ <b>تم تأكيد إيداعك يدوياً!</b>\n💰 <b>${tonAmt} TON</b> أُضيفت إلى رصيدك\n📊 الرصيد الجديد: <b>${newBalance} TON</b>`
-        ).catch(() => {});
-
-        return { success: true, data: { newBalance, credited: tonAmt } };
+        sendTgMsg(userId, `✅ <b>تم تأكيد إيداعك يدوياً!</b>\n💰 <b>${tonAmt} TON</b> أُضيفت إلى رصيدك\n📊 الرصيد الجديد: <b>${newBalance} TON</b>`).catch(() => {});
+        return ok({ newBalance, credited: tonAmt });
       }
 
       case 'adminGetQueue': {
@@ -545,23 +454,19 @@ async function hAdmin(action, data) {
           dbGet('pendingPromos'),
           getLeaderboard(),
         ]);
-        return {
-          success: true,
-          data: {
-            pendingDeposits: pendingDep.data  ? Object.values(pendingDep.data)  : [],
-            pendingPromos  : pendingPromo.data ? Object.values(pendingPromo.data): [],
-            leaderboard,
-          },
-        };
+        return ok({
+          pendingDeposits: pendingDep.data   ? Object.values(pendingDep.data)   : [],
+          pendingPromos  : pendingPromo.data  ? Object.values(pendingPromo.data) : [],
+          leaderboard,
+        });
       }
 
       case 'adminApprovePromo': {
         const { userId, promoId, rewardTon } = data;
-        if (!userId || !promoId) return { success: false, error: 'userId and promoId required' };
+        if (!userId || !promoId) return fail('userId and promoId required');
         const reward = parseFloat(rewardTon || 0);
-
-        const ur   = await dbGet(`users/${userId}`);
-        const user = ur.data || {};
+        const ur     = await dbGet(`users/${userId}`);
+        const user   = ur.data || {};
         const newBalance = parseFloat(((user.tonBalance || 0) + reward).toFixed(6));
 
         await Promise.all([
@@ -569,38 +474,29 @@ async function hAdmin(action, data) {
           dbUpdate(`users/${userId}/promos/${promoId}`, { status: 'approved', earned: reward, reviewedAt: Date.now() }),
           dbDelete(`pendingPromos/${promoId}`),
         ]);
-
-        if (reward > 0) {
-          sendTgMsg(userId,
-            `🏆 <b>منشورك تم قبوله!</b>\n💰 حصلت على <b>${reward} TON</b> مكافأة\n📊 رصيدك الجديد: <b>${newBalance} TON</b>`
-          ).catch(() => {});
-        }
-
-        return { success: true, data: { approved: true, newBalance, reward } };
+        if (reward > 0)
+          sendTgMsg(userId, `🏆 <b>منشورك تم قبوله!</b>\n💰 حصلت على <b>${reward} TON</b> مكافأة\n📊 رصيدك الجديد: <b>${newBalance} TON</b>`).catch(() => {});
+        return ok({ approved: true, newBalance, reward });
       }
 
       case 'adminRejectPromo': {
         const { userId, promoId } = data;
-        if (!userId || !promoId) return { success: false, error: 'userId and promoId required' };
+        if (!userId || !promoId) return fail('userId and promoId required');
         await Promise.all([
           dbUpdate(`users/${userId}/promos/${promoId}`, { status: 'rejected', reviewedAt: Date.now() }),
           dbDelete(`pendingPromos/${promoId}`),
         ]);
-        sendTgMsg(userId,
-          `❌ <b>منشورك تم رفضه</b>\nللأسف لم يستوفِ المنشور المتطلبات. يمكنك إرسال منشور آخر.`
-        ).catch(() => {});
-        return { success: true, data: { rejected: true } };
+        sendTgMsg(userId, `❌ <b>منشورك تم رفضه</b>\nللأسف لم يستوفِ المنشور المتطلبات. يمكنك إرسال منشور آخر.`).catch(() => {});
+        return ok({ rejected: true });
       }
 
       case 'adminSetBalance': {
         const { userId, tonBalance } = data;
-        if (!userId) return { success: false, error: 'userId required' };
+        if (!userId) return fail('userId required');
         const bal = parseFloat(tonBalance || 0);
         await dbUpdate(`users/${userId}`, { tonBalance: bal });
-        sendTgMsg(userId,
-          `💰 تم تعديل رصيدك من قِبل الإدارة\n📊 رصيدك الجديد: <b>${bal} TON</b>`
-        ).catch(() => {});
-        return { success: true, data: { userId, tonBalance: bal } };
+        sendTgMsg(userId, `💰 تم تعديل رصيدك من قِبل الإدارة\n📊 رصيدك الجديد: <b>${bal} TON</b>`).catch(() => {});
+        return ok({ userId, tonBalance: bal });
       }
 
       case 'adminGetAuction': {
@@ -609,25 +505,18 @@ async function hAdmin(action, data) {
           getLeaderboard(),
           dbGet('pendingDeposits'),
         ]);
-        return {
-          success: true,
-          data: {
-            auction        : auction.data,
-            leaderboard,
-            pendingDeposits: pendingDep.data ? Object.values(pendingDep.data) : [],
-          },
-        };
+        return ok({ auction: auction.data, leaderboard, pendingDeposits: pendingDep.data ? Object.values(pendingDep.data) : [] });
       }
 
       case 'adminExtendAuction':
-        return { success: false, error: 'Auction time is locked and cannot be changed from the app' };
+        return fail('Auction time is locked and cannot be changed from the app');
 
       default:
-        return { success: false, error: `Unknown admin action: ${action}` };
+        return fail(`Unknown admin action: ${action}`);
     }
   } catch (e) {
     console.error('hAdmin:', e);
-    return { success: false, error: e.message };
+    return fail(e.message);
   }
 }
 
@@ -635,42 +524,35 @@ async function hAdmin(action, data) {
 //  ROUTES
 // ================================================================
 
-// ── Health check ──
+// Health check
 app.get('/health', (req, res) => {
-  ok(res, { status: 'ok', ts: Date.now(), app: CFG.APP_NAME, minDeposit: CFG.MIN_DEPOSIT_TON });
+  res.json({ success: true, data: { status: 'ok', ts: Date.now(), app: CFG.APP_NAME, minDeposit: CFG.MIN_DEPOSIT_TON } });
 });
 
-// ── TON Connect manifest ──
+// TON Connect manifest
 app.get('/tonconnect-manifest.json', (req, res) => {
-  res.json({
-    url        : CFG.APP_URL,
-    name       : CFG.APP_NAME,
-    iconUrl    : CFG.APP_ICON,
-    description: CFG.APP_DESCRIPTION,
-  });
+  res.json({ url: CFG.APP_URL, name: CFG.APP_NAME, iconUrl: CFG.APP_ICON, description: CFG.APP_DESCRIPTION });
 });
 
-// ── Main API endpoint ──
+// Main API
 app.post('/api', async (req, res) => {
-  // ── Rate limit ──
-  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'unknown';
-  if (!rateOk(ip)) return fail(res, 'Rate limit exceeded', 429);
+  // Rate limit
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+  if (!rateOk(ip)) return res.status(429).json(fail('Rate limit exceeded'));
 
-  // ── Parse body ──
+  // Parse body
   let body;
   try {
     const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-    if (raw.length > 32768) return fail(res, 'Payload too large', 413);
+    if (raw.length > 32768) return res.status(413).json(fail('Payload too large'));
     body = JSON.parse(sanitise(raw));
-  } catch (_) {
-    return fail(res, 'Invalid JSON', 400);
-  }
+  } catch { return res.status(400).json(fail('Invalid JSON')); }
 
   const action = body.action || req.headers['x-action'];
   const data   = body.data || {};
-  if (!action) return fail(res, 'Missing action', 400);
+  if (!action) return res.status(400).json(fail('Missing action'));
 
-  // ── Admin actions ──
+  // Admin actions
   const ADMIN_ACTIONS = new Set([
     'adminGetUser', 'adminConfirmDeposit', 'adminGetQueue',
     'adminApprovePromo', 'adminRejectPromo', 'adminSetBalance',
@@ -683,33 +565,28 @@ app.post('/api', async (req, res) => {
       req.headers['authorization']?.replace('Telegram ', '') ||
       body.initData || ''
     ).slice(0, 4096);
-    const v = await validateTg(initData, process.env.BOT_TOKEN);
-    if (!v.valid) return fail(res, 'Unauthorized', 401);
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim());
-    if (!adminIds.includes(String(v.user?.id))) return fail(res, 'Forbidden', 403);
+    const v = await validateTg(initData, env.BOT_TOKEN);
+    if (!v.valid) return res.status(401).json(fail('Unauthorized'));
+    const adminIds = (env.ADMIN_IDS || '').split(',').map(s => s.trim());
+    if (!adminIds.includes(String(v.user?.id))) return res.status(403).json(fail('Forbidden'));
     return res.json(await hAdmin(action, data));
   }
 
-  // ── User actions ──
+  // User actions
   const initData = (
     req.headers['x-telegram-init-data'] ||
     req.headers['authorization']?.replace('Telegram ', '') ||
     body.initData || ''
   ).slice(0, 4096);
 
-  const v = await validateTg(initData, process.env.BOT_TOKEN);
-
+  const v = await validateTg(initData, env.BOT_TOKEN);
   if (!v.valid) {
     console.error('TG validation failed:', v.error, 'Action:', action);
     return res.status(401).json({
       success  : false,
       error    : 'Telegram authentication required',
       errorCode: 'INVALID_TELEGRAM_AUTH',
-      debug    : {
-        validationError   : v.error,
-        botTokenConfigured: !!process.env.BOT_TOKEN,
-        hasInitData       : !!initData,
-      },
+      debug    : { validationError: v.error, botTokenConfigured: !!env.BOT_TOKEN, hasInitData: !!initData },
     });
   }
 
@@ -717,22 +594,20 @@ app.post('/api', async (req, res) => {
   const tgUser = v.user;
   console.log(`[${new Date().toISOString()}] uid:${uid} action:${action} ip:${ip}`);
 
-  // ── Dispatch ──
   switch (action) {
-    case 'getAuction'    : return res.json(await hGetAuction   (uid, tgUser, data));
+    case 'getAuction'    : return res.json(await hGetAuction   (uid, tgUser));
     case 'getUser'       : return res.json(await hGetUser       (uid, tgUser));
     case 'auctionBid'    : return res.json(await hAuctionBid   (uid, tgUser, data));
     case 'deposit'       : return res.json(await hDeposit       (uid, data));
     case 'verifyDeposit' : return res.json(await hVerifyDeposit (uid, data));
     case 'submitPromo'   : return res.json(await hSubmitPromo   (uid, tgUser, data));
-    default              : return fail(res, `Unknown action: ${action}`, 400);
+    default              : return res.status(400).json(fail(`Unknown action: ${action}`));
   }
 });
 
-// ── Catch-all ──
-app.use((req, res) => fail(res, 'Not found', 404));
+// 404
+app.use((req, res) => res.status(404).json(fail('Not found')));
 
-// ── Start server ──
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+// ── Start ─────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
