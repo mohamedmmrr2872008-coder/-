@@ -278,20 +278,22 @@ async function hGetUser(uid, tg) {
 async function hAuctionBid(uid, tg, data) {
   try {
     const amount = parseFloat(data.amount) || 0;
-    if (amount < CFG.MIN_BID) return { success: false, errorCode: 'BID_MIN', minBid: CFG.MIN_BID };
+    console.log(`[BID] uid:${uid} raw_amount:${data.amount} parsed:${amount} minBid:${CFG.MIN_BID}`);
+    if (amount <= 0 || amount < CFG.MIN_BID)
+      return { success: false, errorCode: 'BID_MIN', minBid: CFG.MIN_BID };
 
     const lockKey = `bidLocks/${uid}`;
     const lockRec = await dbGet(lockKey);
     const now = Date.now();
     if (lockRec.data && (now - (lockRec.data.ts || 0)) < 8000)
-      return { success: false, errorCode: 'BID_WAIT' };
+      return { success: false, errorCode: 'BID_COOLDOWN' };
     await dbSet(lockKey, { ts: now });
 
     try {
       const user = await getOrInitUser(uid, tg);
       if ((user.tonBalance || 0) < amount) {
         await dbSet(lockKey, { ts: 0 });
-        return { success: false, errorCode: 'BID_INSUFFICIENT' };
+        return { success: false, errorCode: 'INSUFFICIENT_BALANCE', balance: user.tonBalance || 0 };
       }
       const auction = await getOrInitAuction();
       if (auction.status !== 'active' || Date.now() > auction.endDate) {
